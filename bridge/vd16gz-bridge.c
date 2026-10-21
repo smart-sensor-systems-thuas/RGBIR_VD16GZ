@@ -47,7 +47,11 @@
 
 enum { R, G, B, I };
 
-/* 4x4 colour filter layout at full resolution, no flips, top-left pixel first. */
+/* vd56g3 driver control: black level (pedestal) added after the sensor's dark calibration */
+#define V4L2_CID_DARKCAL_PEDESTAL (V4L2_CID_USER_BASE | 0x1024)
+
+/* 4x4 colour filter layout at full resolution, no flips, top-left pixel first
+ * (datasheet DS14163, figure 22). */
 static const char *CFA_ROWS[4] = { "GIGI", "BGRG", "GIGI", "RGBG" };
 
 static struct {
@@ -61,7 +65,7 @@ static struct {
 	const char *exposure;    /* NULL (leave), "auto" or lines */
 	int gain;
 } opt = {
-	.threads = 4, .black = 64, .wb_mode = -1, .gain = -1,
+	.threads = 4, .black = -1, .wb_mode = -1, .gain = -1, .ir_subtract = -1,
 	.dev_path = { "/dev/vd16gz-rgb", "/dev/vd16gz-ir", "/dev/vd16gz-raw" },
 };
 
@@ -194,10 +198,15 @@ static void setup_pipeline(char *video, size_t n)
 		fprintf(stderr, "vd16gz-bridge: sensor '%s' (%s) on %s, capturing from %s\n",
 			sensor.name, sensor.devnode, path, video);
 
+		int sfd = open(sensor.devnode, O_RDWR);
+		if (sfd < 0)
+			die("cannot open %s", sensor.devnode);
+		if (opt.black < 0) {
+			/* The sensor's dark calibration subtracts the dark level and adds this pedestal */
+			struct v4l2_control c = { .id = V4L2_CID_DARKCAL_PEDESTAL };
+			opt.black = xioctl(sfd, VIDIOC_G_CTRL, &c) ? 64 : c.value;
+		}
 		if (opt.exposure || opt.gain >= 0) {
-			int sfd = open(sensor.devnode, O_RDWR);
-			if (sfd < 0)
-				die("cannot open %s", sensor.devnode);
 			if (opt.exposure && !strcmp(opt.exposure, "auto")) {
 				set_ctrl(sfd, V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_AUTO, "auto_exposure");
 			} else {
@@ -207,8 +216,8 @@ static void setup_pipeline(char *video, size_t n)
 				if (opt.gain >= 0)
 					set_ctrl(sfd, V4L2_CID_ANALOGUE_GAIN, opt.gain, "analogue_gain");
 			}
-			close(sfd);
 		}
+		close(sfd);
 		close(mfd);
 		return;
 	}
@@ -770,9 +779,10 @@ static void usage(void)
 	       "                     or none when a colour matrix is loaded)\n"
 	       "  --ccm FILE         3x4 colour matrix from tools/calibrate.py\n"
 	       "                     (default /etc/vd16gz/ccm.json if it exists)\n"
-	       "  --ir-subtract K    rgb -= K * ir before the colour matrix\n"
+	       "  --ir-subtract K    rgb -= K * ir, removes near-infrared from R, G and B\n"
+	       "                     (default 1 without a colour matrix, 0 with one)\n"
 	       "  --swap-rb          swap the R and B sites of the colour filter\n"
-	       "  --black N          black level of the 10-bit data (default 64)\n"
+	       "  --black N          black level of the 10-bit data (default: read from the sensor, 64)\n"
 	       "  --exposure auto|N  set sensor auto exposure or N lines (21-2093) at start\n"
 	       "  --gain N           set sensor analogue gain (0-28) at start\n"
 	       "  --threads N        worker threads (default 4)\n"
@@ -822,7 +832,7 @@ static void parse_args(int argc, char **argv)
 	}
 	if (opt.threads < 1 || opt.threads > MAX_THREADS)
 		errno = 0, die("--threads must be 1..%d", MAX_THREADS);
-	if (opt.black < 0 || opt.black > 1000)
+	if (opt.black > 1000)
 		errno = 0, die("--black out of range");
 	if (ccm && strcmp(ccm, "none"))
 		load_ccm(ccm, 1);
@@ -830,6 +840,11 @@ static void parse_args(int argc, char **argv)
 		load_ccm("/etc/vd16gz/ccm.json", 0);
 	if (opt.wb_mode < 0)
 		opt.wb_mode = opt.have_ccm ? 0 : 1;
+	/* R, G and B pixels are about as sensitive to NIR (> 800 nm) as the IR pixels
+	 * (datasheet figure 19), so rgb - ir leaves the visible part. A colour matrix
+	 * from calibrate.py already includes its own IR correction. */
+	if (opt.ir_subtract < 0)
+		opt.ir_subtract = opt.have_ccm ? 0 : 1;
 }
 
 /* -------------------------------------------------------------------- main */
@@ -850,12 +865,12 @@ static double now(void)
 int main(int argc, char **argv)
 {
 	parse_args(argc, argv);
-	init_tables();
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 
 	char video[128];
 	setup_pipeline(video, sizeof(video));
+	init_tables(); /* after setup_pipeline, which reads the black level from the sensor */
 
 	int ow = opt.half ? HALF_W : W, oh = opt.half ? H / 2 : H;
 	struct output out[3];
@@ -879,9 +894,9 @@ int main(int argc, char **argv)
 	float wb[3] = { 1, 1, 1 };
 	if (opt.wb_mode == 2)
 		memcpy(wb, opt.wb_fixed, sizeof(wb));
-	fprintf(stderr, "vd16gz-bridge: streaming %dx%d %s, %s, wb %s\n", ow, oh,
+	fprintf(stderr, "vd16gz-bridge: streaming %dx%d %s, %s, wb %s, ir-subtract %g, black level %d\n", ow, oh,
 		opt.half ? "(half)" : "(full)", opt.linear ? "linear" : "sRGB",
-		opt.wb_mode == 1 ? "auto" : opt.wb_mode == 2 ? "fixed" : "none");
+		opt.wb_mode == 1 ? "auto" : opt.wb_mode == 2 ? "fixed" : "none", opt.ir_subtract, opt.black);
 
 	unsigned long frames = 0, dropped = 0;
 	double t_stat = now(), busy = 0;

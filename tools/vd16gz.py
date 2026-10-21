@@ -40,6 +40,18 @@ CONTROLS = {
 }
 
 
+def analog_gain_factor(code):
+    """Analogue gain factor for control code 0..28: 32 / (32 - code), x1 (0 dB) .. x8 (18 dB).
+
+    Datasheet DS14163, section 2.4.4."""
+    return 32 / (32 - code)
+
+
+def analog_gain_code(factor):
+    """Control code for an analogue gain factor 1..8 (nearest step)."""
+    return min(max(round(32 - 32 / factor), 0), 28)
+
+
 class Sensor:
     def __init__(self, path=SENSOR):
         self.fd = os.open(path, os.O_RDWR)
@@ -75,7 +87,16 @@ class Sensor:
         self.set_exposure(round(microseconds * 1e-6 * PIXEL_RATE / LINE_LENGTH), gain)
 
     def set_gain(self, gain):
+        """Analogue gain control code 0..28 (factor 32 / (32 - code), see analog_gain_factor)."""
         self.set("analogue_gain", gain)
+
+    def set_gain_x(self, factor):
+        """Analogue gain as a factor, 1.0 .. 8.0 (rounded to the nearest of the 29 steps)."""
+        self.set("analogue_gain", analog_gain_code(factor))
+
+    @property
+    def gain_x(self):
+        return analog_gain_factor(self.get("analogue_gain"))
 
     def set_fps(self, fps):
         """Frame rate via vertical blanking (default 60 fps, sensor maximum about 88 fps).

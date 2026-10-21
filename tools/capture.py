@@ -5,7 +5,7 @@ Reads the unprocessed mosaic from /dev/vd16gz-raw (published by vd16gz-bridge),
 optionally averages several frames, and saves:
   <prefix>_raw.npy    10-bit mosaic (H x W, uint16)
   <prefix>_rgbi.npy   linear R, G, B, IR in 0..1 (H x W x 4, float32), black level removed
-  <prefix>_rgb.png    preview (white balanced, sRGB; uses the colour matrix if given)
+  <prefix>_rgb.png    preview (IR subtracted, white balanced, sRGB; or the colour matrix if given)
   <prefix>_ir.png     IR preview (sRGB)
 
 The interpolation is the same as in vd16gz-bridge (normalized convolution).
@@ -22,7 +22,8 @@ from PIL import Image
 WIDTH, HEIGHT = 1124, 1364
 BLACK_LEVEL = 64  # dark_calibration_pedestal, 10-bit
 
-# 4x4 colour filter layout at full resolution with no flips, top-left pixel first.
+# 4x4 colour filter layout at full resolution with no flips, top-left pixel first
+# (datasheet DS14163, figure 22).
 CFA = [
     "GIGI",
     "BGRG",
@@ -87,8 +88,11 @@ def srgb_8bit(x):
     return (np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055) * 255 + 0.5).astype(np.uint8)
 
 
-def preview(rgbi, ccm):
-    rgb = rgbi[..., :3] if ccm is None else rgbi @ ccm.T
+def preview(rgbi, ccm, ir_subtract):
+    if ccm is None:  # R, G and B also see NIR about as strongly as IR does: remove it
+        rgb = np.clip(rgbi[..., :3] - ir_subtract * rgbi[..., 3:4], 0, None)
+    else:
+        rgb = rgbi @ ccm.T
     if ccm is None:  # grey world white balance
         means = rgb.reshape(-1, 3).mean(0)
         rgb = rgb * (means[1] / np.maximum(means, 1e-6))
@@ -102,6 +106,8 @@ def main():
     ap.add_argument("--average", type=int, default=1, metavar="N", help="average N frames to lower noise")
     ap.add_argument("--skip", type=int, default=5, help="frames to discard first (default 5)")
     ap.add_argument("--ccm", default="/etc/vd16gz/ccm.json", help="colour matrix for the preview, if present")
+    ap.add_argument("--ir-subtract", type=float, default=1.0,
+                    help="preview only: rgb -= K * ir when no colour matrix is used (default 1)")
     ap.add_argument("--swap-rb", action="store_true", help="swap the R and B sites of the CFA")
     args = ap.parse_args()
 
@@ -114,7 +120,7 @@ def main():
 
     raw = grab_raw(args.device, args.average, args.skip)
     rgbi = demosaic(raw, cfa_masks(args.swap_rb))
-    rgb8, ir8 = preview(rgbi, ccm)
+    rgb8, ir8 = preview(rgbi, ccm, args.ir_subtract)
     np.save(prefix + "_raw.npy", np.round(raw).astype(np.uint16))
     np.save(prefix + "_rgbi.npy", rgbi)
     Image.fromarray(rgb8).save(prefix + "_rgb.png")

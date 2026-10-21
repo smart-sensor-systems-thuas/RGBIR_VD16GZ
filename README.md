@@ -21,8 +21,8 @@ Made by Daan Boesten on 21 October 2026, together with Claude Opus 5.5 (Anthropi
 | ![RGB example](docs/example_rgb.jpg) | ![IR example](docs/example_ir.jpg) |
 
 *One sensor frame at full resolution (1124 x 1364), split by vd16gz-bridge into RGB and IR;
-both images have the same timestamp. Auto exposure and grey world white balance, no colour
-calibration.*
+both images have the same timestamp. Default settings: auto exposure, NIR removed from RGB
+(`rgb - ir`), grey world white balance, no colour calibration.*
 
 ## How it works
 
@@ -86,7 +86,7 @@ No V4L2 or OpenCV format holds all four colours in one image, so these are the t
 | Content | the measured values, 10-bit (0..1023) | interpolated RGB and IR, 8-bit |
 | Data per frame | 3.1 MB (one stream) | 6.1 MB (two streams) |
 | Bridge CPU at 60 fps | ~2 ms per frame (unpacking only) | ~14 ms per frame on 4 threads, ~3 cores |
-| Values | linear, nothing invented | 3 of 4 values per pixel are estimated; sRGB gamma and white balance by default |
+| Values | linear, nothing invented | 3 of 4 values per pixel are estimated; NIR subtracted, white balance and sRGB gamma by default |
 | Works with | your own code (NumPy / OpenCV) | any webcam program: OpenCV, GStreamer, ffmpeg, browsers |
 | Synchronization | automatic: all four colours are in one image | per frame timestamp, identical on both devices |
 | You need to know | the 4x4 pattern and the black level (64) | nothing; RGB and IR are ready to use |
@@ -176,7 +176,7 @@ import vd16gz
 
 cam = vd16gz.Sensor()
 cam.set_exposure_us(5000)   # manual exposure, 5 ms
-cam.set_gain(8)             # analogue gain step 0..28
+cam.set_gain_x(2.0)         # analogue gain x1..x8 (or cam.set_gain(code), code 0..28)
 cam.auto_exposure()         # the sensor's own auto exposure (default)
 cam.set_fps(30)             # frame rate via vertical blanking
 print(cam.get("exposure"), cam.temperature)
@@ -193,6 +193,10 @@ v4l2-ctl -d /dev/vd16gz-sensor -c auto_exposure=0                # back to auto
 
 Exposure is set in lines of 7.69 us (1236 pixels at 160.8 MHz). At 60 fps it can be at most
 2093 lines (16.1 ms). For longer exposures, lower the frame rate first.
+
+The analogue gain control takes a code from 0 to 28; the gain factor is 32 / (32 - code), so
+code 0 = x1, 16 = x2, 24 = x4 and 28 = x8 (+18 dB). Steps are fine at low gain and coarse at
+high gain. `vd16gz.analog_gain_factor()` and `analog_gain_code()` convert between the two.
 
 ### GStreamer, ffmpeg
 
@@ -249,7 +253,7 @@ Bridge options go in `/etc/default/vd16gz-bridge`. Apply them with
 | `--linear` | linear 8-bit output instead of sRGB gamma (for measurements) |
 | `--wb auto\|none\|R,G,B` | white balance: grey world (default), none, or fixed gains |
 | `--ccm FILE` | 3x4 colour matrix (default `/etc/vd16gz/ccm.json` if it exists) |
-| `--ir-subtract K` | subtract K x IR from R, G and B (IR leakage) |
+| `--ir-subtract K` | subtract K x IR from R, G and B to remove near-infrared (default 1; 0 with a colour matrix). See [Sensor characteristics](#sensor-characteristics) |
 | `--raw none` | don't publish `/dev/vd16gz-raw` |
 | `--exposure auto\|N`, `--gain N` | sensor settings at start-up |
 
@@ -266,7 +270,8 @@ If your own processing needs the CPU, use `--half`, or read only the device you 
 
 ### Colour calibration (optional)
 
-Without calibration, colours are white balanced with the grey world method. For accurate
+Without calibration, the bridge removes NIR with `rgb - ir` and white balances with the grey
+world method. For accurate
 colour, photograph a ColorChecker Classic under your lighting and fit a 3x4 matrix. The matrix
 also uses the IR channel, so it removes IR leakage from the colours:
 
@@ -280,12 +285,86 @@ sudo cp ccm.json /etc/vd16gz/ccm.json && sudo systemctl restart vd16gz-bridge
 `tools/capture.py` also works on its own for linear data. It saves the raw mosaic and a linear
 H x W x 4 (R, G, B, IR) float array for analysis.
 
+## Sensor characteristics
+
+Summary of the ST datasheet *VB16GZ, VD16GZ: Compact and high-sensitivity 1.5 megapixel
+RGB-NIR global shutter image sensors*, DS14163 Rev 4 (March 2026). Get it from ST's
+[VD16GZ product page](https://www.st.com/en/imaging-and-photonics-solutions/vd16gz.html).
+
+### Spectral sensitivity
+
+Figure 19 of the datasheet shows the quantum efficiency (QE) of the four pixel types. Read
+approximately from that figure:
+
+| Pixel | Visible peak | Near-infrared (830-850 nm) | 940 nm |
+|---|---|---|---|
+| B | ~54 % at ~450 nm | ~36 % | ~20 % |
+| G | ~64 % at ~530 nm (plus ~17 % around 700 nm) | ~35 % | ~20 % |
+| R | ~61 % at ~600 nm, still 40-48 % from 650 to 800 nm | ~35 % | ~20 % |
+| IR | below ~5 % from 400 to 760 nm | ~36 % (its peak) | ~20 % |
+
+What this means in practice:
+
+* **R, G and B pixels see near-infrared too.** Above about 820 nm all four pixel types respond
+  almost equally, so every colour pixel holds visible light plus about the same NIR signal as
+  the IR pixel next to it. `rgb - ir` therefore removes the NIR part, and the bridge does this
+  by default (`--ir-subtract 1`). On our test scene, mean colour saturation went from 10 to 15
+  and autumn leaves turned from grey to orange.
+* **650-800 nm can't be separated.** In this band R (and a little G) respond, while the IR
+  pixel hardly does, so subtraction can't remove it. ST designs the sensor for a **dual
+  band-pass lens**: visible light plus one narrow NIR band (850 or 940 nm), with 650-800 nm
+  blocked. With a lens without such a filter, colours drift toward red; a colour matrix from
+  `tools/calibrate.py` corrects most of that.
+* **850 nm is better than 940 nm for active illumination:** QE is ~35 % against ~20 %, so
+  about 1.7x more signal for the same LED power.
+* For **raw-mosaic work**, do the same: subtract the local IR value from R, G and B before
+  computing colour, and use the IR channel as is.
+
+### Other specifications
+
+| Item | Value |
+|---|---|
+| Pixel array | 1124 x 1364 (5:6), global shutter, backside illuminated |
+| Pixel size | 2.61 um; array 2.93 x 3.56 mm; optical format 1/4" (4.61 mm diagonal) |
+| Lens chief ray angle | microlenses designed for a lens with 30 deg CRA at the corners (linear); a mismatch causes colour shading (ST application note AN6472) |
+| ADC | 10-bit; output RAW8 or RAW10 over 1 or 2 CSI-2 lanes |
+| Maximum frame rate | 88 fps at full resolution, 121 fps at 1 MP crop, 237 fps at VGA |
+| Analogue gain | x1 to x8 (+18 dB), 29 steps: gain = 32 / (32 - code) |
+| Digital gain | x1 to x8 in steps of 1/256, one per colour channel |
+| In-sensor processing | auto exposure, dark calibration (pedestal 64 by default), defective pixel correction |
+| Power | 145 mW typical at 60 fps, 4 mW standby |
+| Operating temperature | -30 to +85 C (junction) |
+
+### Sensor features not used yet
+
+The datasheet lists features that this project doesn't use yet. They're good candidates for
+future work:
+
+* **Defective pixel correction.** Because R and B swap places along the matrix, the sensor's
+  defect correction can slightly alter R and B at edges. ST recommends turning it off for
+  the best colour. The vd56g3 driver has no control for it, and the register isn't in the
+  datasheet.
+* **Embedded status lines.** Per-frame metadata: frame counter, exposure time, gains and
+  temperature. This would give the exact exposure of every frame under auto exposure. The
+  driver currently disables them.
+* **Strobe and trigger GPIOs.** The sensor can drive an LED only during exposure, for example
+  an 850 nm illuminator, or start frames from an external trigger to sync several cameras. The
+  driver supports this through device tree properties (`st,leds`, `st,in-sync`,
+  `st,out-sync`), but the overlay doesn't enable them, and it depends on whether the adapter
+  board brings the sensor GPIOs out.
+* **Contexts.** Up to 4 alternating frame setups with their own exposure, gain and GPIO
+  states, for example LED-on / LED-off frame pairs to separate active NIR from ambient light.
+  The driver doesn't expose them.
+* **Cropping** to reach 121 fps at 1 MP. The crop must start at a multiple of 4 pixels to
+  keep the colour pattern aligned.
+
 ## Limitations
 
 * **One program per device at a time.** v4l2loopback 0.13 allows a single streaming reader
   per device. Different programs can read RGB and IR at the same time.
-* **Full resolution only** (1124 x 1364). Cropping or binning on the sensor would shift the
-  colour filter pattern.
+* **Full resolution only** (1124 x 1364). The sensor's own binning and subsampling lose the
+  R or B information (datasheet 2.4.6 and 2.4.7), and cropping must keep the 4x4 pattern
+  aligned, which the bridge doesn't handle yet.
 * **Don't use the sensor's `horizontal_flip` / `vertical_flip` controls.** They change the
   colour filter layout, which the bridge doesn't follow. Flip the images in your own code
   (`cv2.flip`) instead.
