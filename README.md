@@ -22,8 +22,7 @@ Made by Daan Boesten on 21 October 2026, together with Claude Opus 5.5 (Anthropi
 
 *One sensor frame at full resolution (1124 x 1364), split by vd16gz-bridge into RGB and IR;
 both images have the same timestamp. Auto exposure and grey world white balance, no colour
-calibration. Rotated 180 degrees because the camera is mounted upside down. Leaves look bright
-in IR because vegetation reflects strongly in the near-infrared.*
+calibration.*
 
 ## How it works
 
