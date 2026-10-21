@@ -11,8 +11,8 @@ V4L2 cameras: one colour (RGB) and one near-infrared (IR). Any program that can 
 | `/dev/vd16gz-raw` | Y16, 1124 x 1364, 60 fps | unprocessed 4x4 RGB-IR mosaic, 10-bit values |
 | `/dev/vd16gz-sensor` | V4L2 sub-device | exposure, gain, frame rate, ... |
 
-Everything needed is in this repository. You don't need to download ST's STSW-IMG504 package
-separately, because the ST driver source is included in [`driver/`](driver).
+Everything needed is in this repository. ST's STSW-IMG504 package does not have to be
+downloaded separately, because the ST driver source is included in [`driver/`](driver).
 
 Made by Daan Boesten on 21 October 2026, together with Claude Opus 5.5 (Anthropic).
 
@@ -77,7 +77,7 @@ G I G I        R : 2 of 16 pixels
 R G B G        B : 2 of 16 pixels
 ```
 
-You can read this mosaic as it is (`/dev/vd16gz-raw`), or let the bridge turn it into a full
+The mosaic can be read as it is (`/dev/vd16gz-raw`), or the bridge can turn it into a full
 resolution colour image and a full resolution IR image (`/dev/vd16gz-rgb` + `/dev/vd16gz-ir`).
 No V4L2 or OpenCV format holds all four colours in one image, so these are the two routes.
 
@@ -87,22 +87,23 @@ No V4L2 or OpenCV format holds all four colours in one image, so these are the t
 | Data per frame | 3.1 MB (one stream) | 6.1 MB (two streams) |
 | Bridge CPU at 60 fps | ~2 ms per frame (unpacking only) | ~14 ms per frame on 4 threads, ~3 cores |
 | Values | linear, nothing invented | 3 of 4 values per pixel are estimated; NIR subtracted, white balance and sRGB gamma by default |
-| Works with | your own code (NumPy / OpenCV) | any webcam program: OpenCV, GStreamer, ffmpeg, browsers |
+| Works with | custom code (NumPy / OpenCV) | any webcam program: OpenCV, GStreamer, ffmpeg, browsers |
 | Synchronization | automatic: all four colours are in one image | per frame timestamp, identical on both devices |
-| You need to know | the 4x4 pattern and the black level (64) | nothing; RGB and IR are ready to use |
+| Required knowledge | the 4x4 pattern and the black level (64) | nothing; RGB and IR are ready to use |
 
-**Use the raw mosaic** when you measure or analyse light: spectral ratios (e.g. NDVI-like
-indices from R and IR), radiometry, your own demosaicing or machine learning on sensor data,
-or when your own processing needs the CPU. Use it also for 10-bit precision and a linear
-response. Downside: you handle the pattern yourself, and standard video tools can't show it.
+**The raw mosaic** suits measurement and analysis of light: spectral ratios (e.g. NDVI-like
+indices from R and IR), radiometry, custom demosaicing or machine learning on sensor data,
+and applications whose own processing needs the CPU. It also offers 10-bit precision and a
+linear response. Disadvantages: the pattern has to be handled in the application, and standard
+video tools cannot display it.
 
-**Use the split devices** when you want ordinary images: viewing, recording, streaming,
-calibrated colour, or existing OpenCV/GStreamer code that expects a camera. Downsides: the
-bridge needs about 3 CPU cores at full resolution (or under 1 core with `--half`), the values
-are 8-bit, and full resolution adds sharpness only through interpolation. R and B are sampled
+**The split devices** suit applications that need ordinary images: viewing, recording,
+streaming, calibrated colour, or existing OpenCV/GStreamer code that expects a camera.
+Disadvantages: the bridge needs about 3 CPU cores at full resolution (or under 1 core with
+`--half`), the values are 8-bit, and full resolution adds sharpness only through interpolation. R and B are sampled
 on just 1 in 8 pixels, and IR on 1 in 4.
 
-You can mix both: the devices are independent, so one program can read raw while another
+Both can be combined: the devices are independent, so one program can read raw while another
 reads RGB. The bridge only processes what is being read.
 
 ### Working with the raw mosaic
@@ -160,8 +161,8 @@ while True:
 ```
 
 Frames from the RGB and IR devices that belong together have **exactly the same timestamp**
-(`CAP_PROP_POS_MSEC`, CLOCK_MONOTONIC). Use it to pair frames when your program can fall
-behind. [`examples/opencv_view.py`](examples/opencv_view.py) shows both images live, with
+(`CAP_PROP_POS_MSEC`, CLOCK_MONOTONIC). Frames can be paired by this timestamp when a
+program falls behind. [`examples/opencv_view.py`](examples/opencv_view.py) shows both images live, with
 keys for exposure.
 
 Note: OpenCV converts the IR image to 3 identical channels. Use `nir[..., 0]`, or
@@ -254,7 +255,7 @@ Bridge options go in `/etc/default/vd16gz-bridge`. Apply them with
 | `--wb auto\|none\|R,G,B` | white balance: grey world (default), none, or fixed gains |
 | `--ccm FILE` | 3x4 colour matrix (default `/etc/vd16gz/ccm.json` if it exists) |
 | `--ir-subtract K` | subtract K x IR from R, G and B to remove near-infrared (default 1; 0 with a colour matrix). See [Sensor characteristics](#sensor-characteristics) |
-| `--raw none` | don't publish `/dev/vd16gz-raw` |
+| `--raw none` | do not publish `/dev/vd16gz-raw` |
 | `--exposure auto\|N`, `--gain N` | sensor settings at start-up |
 
 **CPU load.** The bridge only processes a device while a program is streaming from it. When
@@ -266,13 +267,13 @@ nobody reads, it uses no CPU. Measured on a Raspberry Pi 5 at 60 fps:
 | IR only | ~1 core | |
 | RGB + IR | ~2.9 cores (~14 ms per frame on 4 threads) | ~0.8 core |
 
-If your own processing needs the CPU, use `--half`, or read only the device you need.
+When the application itself needs the CPU, `--half` or reading only the required device reduces the load.
 
 ### Colour calibration (optional)
 
 Without calibration, the bridge removes NIR with `rgb - ir` and white balances with the grey
 world method. For accurate
-colour, photograph a ColorChecker Classic under your lighting and fit a 3x4 matrix. The matrix
+colour, photograph a ColorChecker Classic under the intended lighting and fit a 3x4 matrix. The matrix
 also uses the IR channel, so it removes IR leakage from the colours:
 
 ```bash
@@ -315,10 +316,10 @@ What this means in practice:
 * **R, G and B pixels see near-infrared too.** Above about 820 nm all four pixel types respond
   almost equally, so every colour pixel holds visible light plus about the same NIR signal as
   the IR pixel next to it. `rgb - ir` therefore removes the NIR part, and the bridge does this
-  by default (`--ir-subtract 1`). On our test scene, mean colour saturation went from 10 to 15
-  and autumn leaves turned from grey to orange.
-* **650-800 nm can't be separated.** In this band R (and a little G) respond, while the IR
-  pixel hardly does, so subtraction can't remove it. ST designs the sensor for a **dual
+  by default (`--ir-subtract 1`). On a test scene, mean colour saturation increased from 10 to 15
+  and autumn leaves changed from grey to orange.
+* **650-800 nm cannot be separated.** In this band R (and a little G) respond, while the IR
+  pixel hardly does, so subtraction cannot remove it. ST designs the sensor for a **dual
   band-pass lens**: visible light plus one narrow NIR band (850 or 940 nm), with 650-800 nm
   blocked. With a lens without such a filter, colours drift toward red; a colour matrix from
   `tools/calibrate.py` corrects most of that.
@@ -346,24 +347,24 @@ What this means in practice:
 
 The datasheet says the sensor is meant for a lens with a **dual band-pass filter**. Such a
 filter passes visible light (about 400-650 nm) plus one narrow NIR band (850 or 940 nm),
-and blocks everything in between, which is exactly the 650-800 nm band that R - IR can't
+and blocks everything in between, which is exactly the 650-800 nm band that R - IR cannot
 remove.
 
 ST's ready-made VD16GZ camera modules (CAM-16GZ "Promodules", for example CAM-6GZ-073CLR)
 have a *clear* filter, and the STEVAL-16GZMAI board comes with an M12 lens holder and a
-default lens. We found no dual band-pass filter sold by ST. Third parties sell them for M12
+default lens. No dual band-pass filter sold by ST was found. Third parties sell them for M12
 lenses, for example Commonlands CDB850 (visible + 850 nm, about 90 % at 850 nm) and CDB851
-(about 60 % at 850 nm, which keeps more colour fidelity in daylight). We haven't tested these;
-check the transmission curve against figure 19 before buying.
+(about 60 % at 850 nm, which keeps more colour fidelity in daylight). These filters have not been tested;
+compare their transmission curves with figure 19 before purchase.
 
 ### Sensor features not used yet
 
-The datasheet lists features that this project doesn't use yet. They're good candidates for
+The datasheet lists features that this project does not use yet. They are candidates for
 future work:
 
 * **Defective pixel correction.** Because R and B swap places along the matrix, the sensor's
   defect correction can slightly alter R and B at edges. ST recommends turning it off for
-  the best colour. The vd56g3 driver has no control for it, and the register isn't in the
+  the best colour. The vd56g3 driver has no control for it, and the register is not documented in the
   datasheet.
 * **Embedded status lines.** Per-frame metadata: frame counter, exposure time, gains and
   temperature. This would give the exact exposure of every frame under auto exposure. The
@@ -371,11 +372,11 @@ future work:
 * **Strobe and trigger GPIOs.** The sensor can drive an LED only during exposure, for example
   an 850 nm illuminator, or start frames from an external trigger to sync several cameras. The
   driver supports this through device tree properties (`st,leds`, `st,in-sync`,
-  `st,out-sync`), but the overlay doesn't enable them, and it depends on whether the adapter
+  `st,out-sync`), but the overlay does not enable them, and it depends on whether the adapter
   board brings the sensor GPIOs out.
 * **Contexts.** Up to 4 alternating frame setups with their own exposure, gain and GPIO
   states, for example LED-on / LED-off frame pairs to separate active NIR from ambient light.
-  The driver doesn't expose them.
+  The driver does not expose them.
 * **Cropping** to reach 121 fps at 1 MP. The crop must start at a multiple of 4 pixels to
   keep the colour pattern aligned.
 
@@ -387,15 +388,15 @@ mosaic:
 * **NIR** is the IR pixel signal and **Red** is R - IR, because R pixels also see NIR (see
   [Spectral sensitivity](#spectral-sensitivity)).
 * It works at quarter resolution (281 x 341): every value is measured and R and IR come from
-  the same exposure, so moving leaves don't cause errors.
+  the same exposure, so moving leaves do not cause errors.
 * It averages 16 frames by default and masks dark areas.
 
 **Calibrate with a reference panel.** NDVI is defined on reflectance, but the camera measures
 signal, which depends on the pixel sensitivities and on the light. Put a grey or white panel
 with known, flat reflectance in red and NIR in view, for example a calibrated grey card or a
 PTFE / Spectralon panel, ideally in the same light as the plants. The tool converts each
-channel to reflectance using the panel. Without a panel the values are uncalibrated: on our
-test scene everything came out around -0.5, because the red signal is simply much stronger
+channel to reflectance using the panel. Without a panel the values are uncalibrated: on a
+test scene all areas came out around -0.5, because the red signal is simply much stronger
 than the NIR signal.
 
 ```bash
@@ -421,14 +422,14 @@ Tips for reliable values:
 
 * Use a fixed, manual exposure with no saturation in R or IR; the tool warns about saturation.
   Keep the panel in every image when the light changes (clouds).
-* Don't measure through window glass: coated glass often blocks NIR.
+* Avoid measuring through window glass: coated glass often blocks NIR.
 * Without a dual band-pass lens filter, 650-800 nm light remains in "Red" (see
   [Lens filter](#lens-filter)). NDVI then comes out somewhat low, but comparisons over time
   with the same setup stay valid.
 * Average over an area of the plant rather than reading single pixels: the R and IR pixels
   are a few pixels apart, so thin branches and leaf edges give noisy values.
 
-For your own analysis, `vd16gz.read_raw()` and `vd16gz.quarter_rgbi()` give the averaged raw
+For custom analysis, `vd16gz.read_raw()` and `vd16gz.quarter_rgbi()` give the averaged raw
 frame and the linear R, G, B, IR channels:
 
 ```python
@@ -443,14 +444,15 @@ red, nir = rgbi[..., 0] - rgbi[..., 3], rgbi[..., 3]
   per device. Different programs can read RGB and IR at the same time.
 * **Full resolution only** (1124 x 1364). The sensor's own binning and subsampling lose the
   R or B information (datasheet 2.4.6 and 2.4.7), and cropping must keep the 4x4 pattern
-  aligned, which the bridge doesn't handle yet.
-* **Don't use the sensor's `horizontal_flip` / `vertical_flip` controls.** They change the
-  colour filter layout, which the bridge doesn't follow. Flip the images in your own code
-  (`cv2.flip`) instead.
+  aligned, which the bridge does not handle yet.
+* **The sensor's `horizontal_flip` / `vertical_flip` controls must not be used.** They change
+  the colour filter layout, which the bridge does not follow. Flip the images in the
+  application (`cv2.flip`) instead.
 * The sensor itself can run at up to about 88 fps (`set_fps`), but full-resolution
   processing reaches about 70 fps. Use `--half` for higher frame rates.
 * While the service runs, it owns the camera. Programs that open the CSI-2 receiver directly
-  (`/dev/video0`, `rpicam-*`) won't work until you `sudo systemctl stop vd16gz-bridge`.
+  (`/dev/video0`, `rpicam-*`) do not work until the service is stopped with
+  `sudo systemctl stop vd16gz-bridge`.
 
 ## Troubleshooting
 
