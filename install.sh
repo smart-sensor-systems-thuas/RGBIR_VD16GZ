@@ -24,8 +24,9 @@ step() { echo; echo "==> $*"; }
 step "Installing packages"
 apt-get update -q
 apt-get install -y -q dkms device-tree-compiler build-essential v4l-utils v4l2loopback-dkms \
+	python3-numpy python3-opencv python3-pil \
 	"linux-headers-$KVER" || apt-get install -y -q dkms device-tree-compiler build-essential \
-	v4l-utils v4l2loopback-dkms linux-headers-rpi-2712
+	v4l-utils v4l2loopback-dkms python3-numpy python3-opencv python3-pil linux-headers-rpi-2712
 
 step "Kernel driver $DRV_NAME $DRV_VERSION (DKMS)"
 # Older manual installs put vd56g3.ko straight into /lib/modules/<version>/; that copy

@@ -18,7 +18,10 @@ import fcntl
 import os
 import struct
 
+import numpy as np
+
 SENSOR = "/dev/vd16gz-sensor"
+RAW = "/dev/vd16gz-raw"
 PIXEL_RATE = 160_800_000  # pixels per second
 LINE_LENGTH = 1124 + 112  # width + horizontal blanking, in pixels
 HEIGHT = 1364
@@ -38,6 +41,49 @@ CONTROLS = {
     "test_pattern": 0x009F0903,  # 0 = off, 2 = colour bars, ...
     "temperature": 0x00981920,  # read-only, degrees Celsius
 }
+
+
+def quarter_rgbi(raw, black=64):
+    """Split a raw mosaic (H x W, 10-bit) into linear R, G, B, IR at quarter resolution.
+
+    Every 4x4 block of the colour pattern (datasheet figure 22) gives one value per channel,
+    the average of its 2 R, 8 G, 2 B and 4 IR pixels; nothing is interpolated.
+    Returns an (H/4) x (W/4) x 4 float32 array, black level removed, in raw units (0..1023-black).
+    """
+    lin = np.clip(np.asarray(raw, np.float32) - black, 0, None)
+    h, w = lin.shape[0] // 4, lin.shape[1] // 4
+    lin = lin[: 4 * h, : 4 * w]
+
+    def blocks(a):  # average the 2x2 samples of a half-resolution plane per 4x4 block
+        return a.reshape(h, 2, w, 2).mean((1, 3))
+
+    r = (lin[3::4, 0::4] + lin[1::4, 2::4]) / 2
+    b = (lin[1::4, 0::4] + lin[3::4, 2::4]) / 2
+    g = blocks((lin[0::2, 0::2] + lin[1::2, 1::2]) / 2)
+    ir = blocks(lin[0::2, 1::2])
+    return np.dstack([r, g, b, ir]).astype(np.float32)
+
+
+def read_raw(device=RAW, frames=1, skip=0):
+    """Read the raw mosaic from vd16gz-bridge, averaged over a number of frames (float64)."""
+    import cv2  # only needed here
+
+    cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        raise RuntimeError(f"cannot open {device}; is vd16gz-bridge running with the raw output?")
+    cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+    acc, n = None, 0
+    try:
+        for i in range(skip + frames):
+            ok, img = cap.read()
+            if not ok:
+                raise RuntimeError(f"no frame from {device}")
+            if i >= skip:
+                acc = img.astype(np.float64) if acc is None else acc + img
+                n += 1
+    finally:
+        cap.release()
+    return acc.reshape(HEIGHT, -1) / n
 
 
 def analog_gain_factor(code):

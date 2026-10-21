@@ -342,6 +342,20 @@ What this means in practice:
 | Power | 145 mW typical at 60 fps, 4 mW standby |
 | Operating temperature | -30 to +85 C (junction) |
 
+### Lens filter
+
+The datasheet says the sensor is meant for a lens with a **dual band-pass filter**. Such a
+filter passes visible light (about 400-650 nm) plus one narrow NIR band (850 or 940 nm),
+and blocks everything in between, which is exactly the 650-800 nm band that R - IR can't
+remove.
+
+ST's ready-made VD16GZ camera modules (CAM-16GZ "Promodules", for example CAM-6GZ-073CLR)
+have a *clear* filter, and the STEVAL-16GZMAI board comes with an M12 lens holder and a
+default lens. We found no dual band-pass filter sold by ST. Third parties sell them for M12
+lenses, for example Commonlands CDB850 (visible + 850 nm, about 90 % at 850 nm) and CDB851
+(about 60 % at 850 nm, which keeps more colour fidelity in daylight). We haven't tested these;
+check the transmission curve against figure 19 before buying.
+
 ### Sensor features not used yet
 
 The datasheet lists features that this project doesn't use yet. They're good candidates for
@@ -364,6 +378,64 @@ future work:
   The driver doesn't expose them.
 * **Cropping** to reach 121 fps at 1 MP. The crop must start at a multiple of 4 pixels to
   keep the colour pattern aligned.
+
+## NDVI (vegetation index)
+
+[`tools/ndvi.py`](tools/ndvi.py) computes NDVI = (NIR - Red) / (NIR + Red) from the raw
+mosaic:
+
+* **NIR** is the IR pixel signal and **Red** is R - IR, because R pixels also see NIR (see
+  [Spectral sensitivity](#spectral-sensitivity)).
+* It works at quarter resolution (281 x 341): every value is measured and R and IR come from
+  the same exposure, so moving leaves don't cause errors.
+* It averages 16 frames by default and masks dark areas.
+
+**Calibrate with a reference panel.** NDVI is defined on reflectance, but the camera measures
+signal, which depends on the pixel sensitivities and on the light. Put a grey or white panel
+with known, flat reflectance in red and NIR in view, for example a calibrated grey card or a
+PTFE / Spectralon panel, ideally in the same light as the plants. The tool converts each
+channel to reflectance using the panel. Without a panel the values are uncalibrated: on our
+test scene everything came out around -0.5, because the red signal is simply much stronger
+than the NIR signal.
+
+```bash
+# panel and measuring areas as X,Y,W,H in full-resolution pixels (after --rotate)
+python3 tools/ndvi.py tree --rotate 180 --panel 480,900,60,60 --panel-reflectance 0.5 \
+        --roi 600,700,200,150 --roi 100,880,200,150
+python3 tools/ndvi.py tree --select                 # draw panel and areas with the mouse
+python3 tools/ndvi.py --live --panel 480,900,60,60  # live NDVI window (desktop session)
+python3 tools/ndvi.py old --input old_raw.npy       # from a capture.py raw file
+```
+
+It saves `tree_ndvi.png` (colour preview, NDVI map, colour scale) and `tree_ndvi.npy` (float
+NDVI, NaN where masked), and prints the median, mean and spread of NDVI for the panel, the
+whole image and every area.
+
+![NDVI demonstration](docs/example_ndvi.jpg)
+
+*Demonstration only: the overcast sky stands in for the reference panel, so these are relative
+values, not true NDVI. Area 1 (green vegetation) +0.22, area 2 (autumn leaves) +0.07, area 3
+(building) +0.02.*
+
+Tips for reliable values:
+
+* Use a fixed, manual exposure with no saturation in R or IR; the tool warns about saturation.
+  Keep the panel in every image when the light changes (clouds).
+* Don't measure through window glass: coated glass often blocks NIR.
+* Without a dual band-pass lens filter, 650-800 nm light remains in "Red" (see
+  [Lens filter](#lens-filter)). NDVI then comes out somewhat low, but comparisons over time
+  with the same setup stay valid.
+* Average over an area of the plant rather than reading single pixels: the R and IR pixels
+  are a few pixels apart, so thin branches and leaf edges give noisy values.
+
+For your own analysis, `vd16gz.read_raw()` and `vd16gz.quarter_rgbi()` give the averaged raw
+frame and the linear R, G, B, IR channels:
+
+```python
+import vd16gz
+rgbi = vd16gz.quarter_rgbi(vd16gz.read_raw(frames=16))   # 341 x 281 x 4, linear
+red, nir = rgbi[..., 0] - rgbi[..., 3], rgbi[..., 3]
+```
 
 ## Limitations
 
@@ -400,7 +472,7 @@ dmesg | grep -i vd56g3                    # did the driver find the sensor?
 driver/      ST vd56g3 kernel driver v1.2.1 (from STSW-IMG504), dkms.conf, device tree overlay
 bridge/      vd16gz-bridge (C), mosaic -> RGB / IR / raw V4L2 devices
 systemd/     service, v4l2loopback options, udev rules
-tools/       vd16gz.py (sensor controls), verify_sync.py, capture.py, calibrate.py
+tools/       vd16gz.py (sensor controls, raw helpers), verify_sync.py, capture.py, calibrate.py, ndvi.py
 examples/    opencv_view.py, web_stream.py
 docs/        example images
 ```
