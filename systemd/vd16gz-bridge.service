@@ -1,0 +1,15 @@
+[Unit]
+Description=VD16GZ RGB-IR camera bridge (RGB and IR V4L2 devices)
+After=systemd-modules-load.service systemd-udev-settle.service
+
+[Service]
+EnvironmentFile=-/etc/default/vd16gz-bridge
+ExecStart=/usr/local/bin/vd16gz-bridge $BRIDGE_ARGS
+Restart=on-failure
+RestartSec=3
+DynamicUser=yes
+SupplementaryGroups=video
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

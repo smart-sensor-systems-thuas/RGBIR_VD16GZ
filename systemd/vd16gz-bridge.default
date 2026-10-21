@@ -1,0 +1,10 @@
+# Options for vd16gz-bridge (installed to /etc/default/vd16gz-bridge).
+# Apply changes with: sudo systemctl restart vd16gz-bridge
+# Run `vd16gz-bridge --help` for all options, for example:
+#   --half            560x682 output, much less CPU
+#   --linear          linear 8-bit output instead of sRGB gamma
+#   --wb none         no white balance (default auto, or none with a colour matrix)
+#   --raw none        do not publish the raw mosaic device
+#   --exposure 800    manual exposure in lines at start-up (default: leave the sensor as it is)
+# A colour matrix from tools/calibrate.py is picked up from /etc/vd16gz/ccm.json.
+BRIDGE_ARGS=""

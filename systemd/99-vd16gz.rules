@@ -1,0 +1,5 @@
+# Stable names for the VD16GZ devices (installed to /etc/udev/rules.d/)
+SUBSYSTEM=="video4linux", ATTR{name}=="VD16GZ RGB", SYMLINK+="vd16gz-rgb"
+SUBSYSTEM=="video4linux", ATTR{name}=="VD16GZ IR", SYMLINK+="vd16gz-ir"
+SUBSYSTEM=="video4linux", ATTR{name}=="VD16GZ raw", SYMLINK+="vd16gz-raw"
+SUBSYSTEM=="video4linux", KERNEL=="v4l-subdev*", ATTR{name}=="vd56g3 *", SYMLINK+="vd16gz-sensor"
