@@ -4,3 +4,4 @@ __pycache__/
 *.png
 *.mp4
 ccm.json
+!docs/*.png

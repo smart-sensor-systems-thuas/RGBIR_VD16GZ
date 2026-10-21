@@ -293,8 +293,15 @@ RGB-NIR global shutter image sensors*, DS14163 Rev 4 (March 2026). Get it from S
 
 ### Spectral sensitivity
 
-Figure 19 of the datasheet shows the quantum efficiency (QE) of the four pixel types. Read
-approximately from that figure:
+Figure 19 of the datasheet shows the quantum efficiency (QE) of the four pixel types:
+
+![VD16GZ quantum efficiency per pixel type](docs/vd16gz_quantum_efficiency.png)
+
+*Quantum efficiency of the B (blue), G (green), R (red) and IR (dark grey) pixels, typical
+part at 40 C junction temperature. Source: STMicroelectronics, datasheet DS14163 Rev 4,
+figure 19.*
+
+Read approximately from that figure:
 
 | Pixel | Visible peak | Near-infrared (830-850 nm) | 940 nm |
 |---|---|---|---|
