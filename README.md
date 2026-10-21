@@ -14,6 +14,17 @@ V4L2 cameras: one colour (RGB) and one near-infrared (IR). Any program that can 
 Everything needed is in this repository. You don't need to download ST's STSW-IMG504 package
 separately, because the ST driver source is included in [`driver/`](driver).
 
+Made by Daan Boesten on 21 October 2026, together with Claude Opus 5.5 (Anthropic).
+
+| RGB (`/dev/vd16gz-rgb`) | IR (`/dev/vd16gz-ir`) |
+|---|---|
+| ![RGB example](docs/example_rgb.jpg) | ![IR example](docs/example_ir.jpg) |
+
+*One sensor frame at full resolution (1124 x 1364), split by vd16gz-bridge into RGB and IR;
+both images have the same timestamp. Auto exposure and grey world white balance, no colour
+calibration. Rotated 180 degrees because the camera is mounted upside down. Leaves look bright
+in IR because vegetation reflects strongly in the near-infrared.*
+
 ## How it works
 
 ```
@@ -55,6 +66,82 @@ After the reboot, `ls /dev/vd16gz-*` shows the four devices. The installer:
   Python helper `vd16gz.py`
 
 Remove everything again with `sudo ./uninstall.sh`.
+
+## Raw mosaic or split RGB / IR?
+
+The sensor measures one colour per pixel in a repeating 4x4 pattern (top-left pixel first):
+
+```
+G I G I        G : 8 of 16 pixels
+B G R G        I : 4 of 16 pixels (near-infrared)
+G I G I        R : 2 of 16 pixels
+R G B G        B : 2 of 16 pixels
+```
+
+You can read this mosaic as it is (`/dev/vd16gz-raw`), or let the bridge turn it into a full
+resolution colour image and a full resolution IR image (`/dev/vd16gz-rgb` + `/dev/vd16gz-ir`).
+No V4L2 or OpenCV format holds all four colours in one image, so these are the two routes.
+
+| | Raw mosaic (`/dev/vd16gz-raw`) | Split (`/dev/vd16gz-rgb` + `/dev/vd16gz-ir`) |
+|---|---|---|
+| Content | the measured values, 10-bit (0..1023) | interpolated RGB and IR, 8-bit |
+| Data per frame | 3.1 MB (one stream) | 6.1 MB (two streams) |
+| Bridge CPU at 60 fps | ~2 ms per frame (unpacking only) | ~14 ms per frame on 4 threads, ~3 cores |
+| Values | linear, nothing invented | 3 of 4 values per pixel are estimated; sRGB gamma and white balance by default |
+| Works with | your own code (NumPy / OpenCV) | any webcam program: OpenCV, GStreamer, ffmpeg, browsers |
+| Synchronization | automatic: all four colours are in one image | per frame timestamp, identical on both devices |
+| You need to know | the 4x4 pattern and the black level (64) | nothing; RGB and IR are ready to use |
+
+**Use the raw mosaic** when you measure or analyse light: spectral ratios (e.g. NDVI-like
+indices from R and IR), radiometry, your own demosaicing or machine learning on sensor data,
+or when your own processing needs the CPU. Use it also for 10-bit precision and a linear
+response. Downside: you handle the pattern yourself, and standard video tools can't show it.
+
+**Use the split devices** when you want ordinary images: viewing, recording, streaming,
+calibrated colour, or existing OpenCV/GStreamer code that expects a camera. Downsides: the
+bridge needs about 3 CPU cores at full resolution (or under 1 core with `--half`), the values
+are 8-bit, and full resolution adds sharpness only through interpolation. R and B are sampled
+on just 1 in 8 pixels, and IR on 1 in 4.
+
+You can mix both: the devices are independent, so one program can read raw while another
+reads RGB. The bridge only processes what is being read.
+
+### Working with the raw mosaic
+
+OpenCV reads `/dev/vd16gz-raw` as a 16-bit single-channel image. Slicing the channels out
+with NumPy creates views without copying, so it costs almost nothing:
+
+```python
+import cv2
+import numpy as np
+
+cap = cv2.VideoCapture("/dev/vd16gz-raw", cv2.CAP_V4L2)
+cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+ok, raw = cap.read()                                   # (1364, 1124) uint16, 0..1023
+lin = np.clip(raw.astype(np.float32) - 64, 0, None)    # remove black level, linear
+
+# Quarter resolution (341 x 281): every value measured, nothing interpolated.
+# Each 4x4 block gives one R, G, B and IR value (averages of its samples).
+blk = lambda a: a.reshape(341, a.shape[0] // 341, 281, a.shape[1] // 281).mean((1, 3))
+R  = (lin[3::4, 0::4] + lin[1::4, 2::4]) / 2
+B  = (lin[1::4, 0::4] + lin[3::4, 2::4]) / 2
+G  = blk((lin[0::2, 0::2] + lin[1::2, 1::2]) / 2)
+IR = blk(lin[0::2, 1::2])
+rgbi = np.dstack([R, G, B, IR])                        # 341 x 281 x 4
+
+# Half resolution (682 x 562): G and IR measured in every 2x2 block; each block holds
+# only one of R or B (B where row + column of the block is even, R where it is odd).
+g_half  = (lin[0::2, 0::2] + lin[1::2, 1::2]) / 2
+ir_half = lin[0::2, 1::2]
+rb_half = lin[1::2, 0::2]
+```
+
+Which resolution to use: quarter resolution gives all four channels without interpolation,
+which is best for measurements. Half resolution is a good compromise for most computer vision
+(G and IR measured, R/B partly estimated). Full resolution is only sharper through
+interpolation; use the split devices for it, because the bridge's C code is much faster than
+NumPy. [`tools/capture.py`](tools/capture.py) contains a NumPy full-resolution demosaic
+identical to the bridge's, for offline work.
 
 ## Using the camera
 
@@ -230,6 +317,7 @@ bridge/      vd16gz-bridge (C), mosaic -> RGB / IR / raw V4L2 devices
 systemd/     service, v4l2loopback options, udev rules
 tools/       vd16gz.py (sensor controls), verify_sync.py, capture.py, calibrate.py
 examples/    opencv_view.py, web_stream.py
+docs/        example images
 ```
 
 ## Licences
