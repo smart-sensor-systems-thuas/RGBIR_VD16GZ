@@ -415,8 +415,9 @@ whole image and every area.
 ![NDVI demonstration](docs/example_ndvi.jpg)
 
 *Demonstration only: the overcast sky stands in for the reference panel, so these are relative
-values, not true NDVI. Area 1 (green vegetation) +0.22, area 2 (autumn leaves) +0.07, area 3
-(building) +0.02.*
+values, not true NDVI, and the image was taken through window glass. Median NDVI: area 1 (tree,
+partly bare) +0.25, area 2 (tree in leaf) +0.39, area 3 (grass verge) +0.40, area 4 (road)
++0.17, area 5 (house) +0.21.*
 
 Tips for reliable values:
 
